@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
+import { upload } from "@vercel/blob/client";
 import {
   computeCfao,
   DEFAULT_PRESETS,
@@ -149,6 +150,7 @@ export default function Page() {
     setThresholds(preset.thresholds);
 
     setPreviewResults(null);
+    setSelectedRun(null);
   }
 
   async function savePreset() {
@@ -158,7 +160,9 @@ export default function Page() {
 
     await fetch("/api/presets", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
         slug,
         name,
@@ -218,35 +222,56 @@ export default function Page() {
       return;
     }
 
+    if (!previewResults) {
+      alert("Run Preview first before saving.");
+      return;
+    }
+
     setSaving(true);
 
     try {
-      const form = new FormData();
-      form.append("coverageFile", coverageFile);
-      form.append("salesFile", salesFile);
-      form.append("label", label);
-      form.append("month", month);
-      form.append("ourSku", ourSku);
-      form.append(
-        "competitorSkus",
-        JSON.stringify(
-          competitorSkus
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean)
-        )
+      const coverageUpload = await upload(
+        `coverage/${month}-${coverageFile.name}`,
+        coverageFile,
+        {
+          access: "public",
+          handleUploadUrl: "/api/blob-upload",
+        }
       );
-      form.append("oneToOneMode", String(oneToOneMode));
-      form.append("mode", mode);
-      form.append("thresholds", JSON.stringify(thresholds));
+
+      const salesUpload = await upload(
+        `sales/${month}-${salesFile.name}`,
+        salesFile,
+        {
+          access: "public",
+          handleUploadUrl: "/api/blob-upload",
+        }
+      );
 
       const preset = presets.find((p) => p.slug === presetSlug);
-      form.append("presetId", preset?.id ?? "");
-      form.append("createdBy", "team-user");
 
       const res = await fetch("/api/runs", {
         method: "POST",
-        body: form,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          label,
+          month,
+          presetId: preset?.id ?? null,
+          ourSku,
+          competitorSkus: competitorSkus
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
+          oneToOneMode,
+          mode,
+          thresholds,
+          coverageBlobUrl: coverageUpload.url,
+          salesBlobUrl: salesUpload.url,
+          createdBy: "team-user",
+          results: previewResults,
+        }),
       });
 
       const data = await res.json();
@@ -258,6 +283,9 @@ export default function Page() {
 
       await loadRuns();
       await openRun(data.runId);
+    } catch (error) {
+      console.error(error);
+      alert("Failed to save shared run.");
     } finally {
       setSaving(false);
     }
@@ -268,14 +296,21 @@ export default function Page() {
       method: "DELETE",
     });
 
-    if (selectedRun?.id === runId) setSelectedRun(null);
+    if (selectedRun?.id === runId) {
+      setSelectedRun(null);
+    }
+
     await loadRuns();
   }
 
   const activeResults = previewResults ?? selectedRun?.results ?? null;
-  const activeOneToOneMode = previewResults ? oneToOneMode : selectedRun?.oneToOneMode ?? oneToOneMode;
+  const activeOneToOneMode = previewResults
+    ? oneToOneMode
+    : selectedRun?.oneToOneMode ?? oneToOneMode;
   const activeSku = previewResults ? ourSku : selectedRun?.ourSku ?? ourSku;
-  const activeLabel = previewResults ? `Preview: ${label}` : selectedRun?.label ?? null;
+  const activeLabel = previewResults
+    ? `Preview: ${label}`
+    : selectedRun?.label ?? null;
 
   const filtered = useMemo(() => {
     if (!activeResults) return null;
@@ -596,7 +631,8 @@ export default function Page() {
 
           <p className="note">
             Run Preview shows CFAO instantly without saving. Save shared run
-            stores the files and results for the team.
+            uploads the source CSVs to Blob and stores the preview results in
+            Postgres for the team.
           </p>
         </div>
       </div>
@@ -742,8 +778,7 @@ export default function Page() {
         <h2>Required Vercel setup</h2>
         <p className="note">
           Add Vercel Postgres and Vercel Blob to your project, then run the SQL
-          in db/schema.sql. After that, this becomes a real shared team analysis
-          tool.
+          in db/schema.sql.
         </p>
       </div>
     </main>

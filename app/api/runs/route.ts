@@ -1,13 +1,5 @@
 import { NextResponse } from "next/server";
-import { put } from "@vercel/blob";
-import Papa from "papaparse";
-import { computeCfao } from "@/lib/cfao";
 import { createResult, createRun, getRun, listRuns, removeRun } from "@/lib/db";
-
-function parseCsvText(text: string) {
-  const result = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
-  return result.data;
-}
 
 function regroup(rows: any[]) {
   const allStores = rows.map((r) => ({
@@ -28,6 +20,7 @@ function regroup(rows: any[]) {
     segment: r.segment ?? undefined,
     bucket: r.bucket,
   }));
+
   return {
     allStores,
     cuts: allStores.filter((r) => r.bucket === "cut"),
@@ -42,9 +35,13 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const runId = url.searchParams.get("runId");
     const ourSku = url.searchParams.get("ourSku") || undefined;
+
     if (runId) {
       const { run, rows } = await getRun(runId);
-      if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+      if (!run) {
+        return NextResponse.json({ error: "Run not found" }, { status: 404 });
+      }
+
       return NextResponse.json({
         id: run.id,
         label: run.label,
@@ -55,46 +52,54 @@ export async function GET(request: Request) {
         results: regroup(rows),
       });
     }
+
     return NextResponse.json(await listRuns(ourSku));
   } catch (error) {
-    return NextResponse.json({ error: "Failed to load runs", detail: String(error) }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load runs", detail: String(error) },
+      { status: 500 }
+    );
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const form = await request.formData();
-    const coverageFile = form.get("coverageFile") as File | null;
-    const salesFile = form.get("salesFile") as File | null;
-    if (!coverageFile || !salesFile) {
-      return NextResponse.json({ error: "Coverage and sales files are required" }, { status: 400 });
+    const body = await request.json();
+
+    const {
+      label,
+      month,
+      presetId,
+      ourSku,
+      competitorSkus,
+      oneToOneMode,
+      mode,
+      thresholds,
+      coverageBlobUrl,
+      salesBlobUrl,
+      createdBy,
+      results,
+    } = body;
+
+    if (!results?.allStores || !Array.isArray(results.allStores)) {
+      return NextResponse.json(
+        { error: "Missing results payload" },
+        { status: 400 }
+      );
     }
 
-    const label = String(form.get("label") ?? "");
-    const month = String(form.get("month") ?? "");
-    const presetId = String(form.get("presetId") ?? "") || null;
-    const ourSku = String(form.get("ourSku") ?? "");
-    const competitorSkus = JSON.parse(String(form.get("competitorSkus") ?? "[]"));
-    const oneToOneMode = String(form.get("oneToOneMode") ?? "false") === "true";
-    const rawMode = String(form.get("mode") ?? "annual");
-const mode: "annual" | "monthly" = rawMode === "monthly" ? "monthly" : "annual";
-    const thresholds = JSON.parse(String(form.get("thresholds") ?? "{}"));
-    const createdBy = String(form.get("createdBy") ?? "") || null;
-
-    const coverageText = await coverageFile.text();
-    const salesText = await salesFile.text();
-
-    const coverageRows = parseCsvText(coverageText);
-    const salesRows = parseCsvText(salesText);
-
-    const results = computeCfao({ coverageRows, salesRows, ourSku, competitorSkus, oneToOneMode, mode, thresholds });
-
-    const coverageBlob = await put(`coverage/${month}-${coverageFile.name}`, coverageText, { access: "public", contentType: "text/csv", addRandomSuffix: true });
-    const salesBlob = await put(`sales/${month}-${salesFile.name}`, salesText, { access: "public", contentType: "text/csv", addRandomSuffix: true });
-
     const runId = await createRun({
-      label, month, presetId, ourSku, competitorSkus, oneToOneMode, mode, thresholds,
-      coverageBlobUrl: coverageBlob.url, salesBlobUrl: salesBlob.url, createdBy
+      label,
+      month,
+      presetId: presetId || null,
+      ourSku,
+      competitorSkus,
+      oneToOneMode,
+      mode,
+      thresholds,
+      coverageBlobUrl: coverageBlobUrl || null,
+      salesBlobUrl: salesBlobUrl || null,
+      createdBy: createdBy || null,
     });
 
     for (const row of results.allStores) {
@@ -103,7 +108,10 @@ const mode: "annual" | "monthly" = rawMode === "monthly" ? "monthly" : "annual";
 
     return NextResponse.json({ ok: true, runId });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to save run", detail: String(error) }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to save run", detail: String(error) },
+      { status: 500 }
+    );
   }
 }
 
@@ -111,10 +119,20 @@ export async function DELETE(request: Request) {
   try {
     const url = new URL(request.url);
     const runId = url.searchParams.get("runId");
-    if (!runId) return NextResponse.json({ error: "runId is required" }, { status: 400 });
+
+    if (!runId) {
+      return NextResponse.json(
+        { error: "runId is required" },
+        { status: 400 }
+      );
+    }
+
     await removeRun(runId);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to delete run", detail: String(error) }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to delete run", detail: String(error) },
+      { status: 500 }
+    );
   }
 }
