@@ -41,25 +41,27 @@ function fmtPct(value: number) {
 }
 
 export function DeltaTables({
-  historyRuns,
+  baselineRun,
+  comparisonRun,
 }: {
-  historyRuns: RunLike[];
+  baselineRun: RunLike | null;
+  comparisonRun: RunLike | null;
 }) {
-  if (historyRuns.length < 2) {
+  if (!baselineRun || !comparisonRun) {
     return (
-      <div className="card">
-        <h2>Month-over-Month Changes</h2>
-        <p className="note">Save at least two runs for this SKU to see deltas and transitions.</p>
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2>Comparison Views</h2>
+        <p className="note">Select two runs to compare.</p>
       </div>
     );
   }
 
-  const sorted = [...historyRuns].sort((a, b) => a.month.localeCompare(b.month));
-  const prior = sorted[sorted.length - 2];
-  const current = sorted[sorted.length - 1];
-
-  const priorMap = new Map(prior.results.allStores.map((r) => [r.agencyId, r]));
-  const currentMap = new Map(current.results.allStores.map((r) => [r.agencyId, r]));
+  const priorMap = new Map(
+    baselineRun.results.allStores.map((r) => [r.agencyId, r])
+  );
+  const currentMap = new Map(
+    comparisonRun.results.allStores.map((r) => [r.agencyId, r])
+  );
 
   const agencyIds = Array.from(
     new Set([...priorMap.keys(), ...currentMap.keys()])
@@ -72,11 +74,11 @@ export function DeltaTables({
     const priorRetail = p?.ourRetail ?? 0;
     const currentRetail = c?.ourRetail ?? 0;
 
-    const priorBenchmark = prior.oneToOneMode
+    const priorBenchmark = baselineRun.oneToOneMode
       ? p?.oneToOneRetail ?? 0
       : p?.craftAvg ?? 0;
 
-    const currentBenchmark = current.oneToOneMode
+    const currentBenchmark = comparisonRun.oneToOneMode
       ? c?.oneToOneRetail ?? 0
       : c?.craftAvg ?? 0;
 
@@ -108,7 +110,7 @@ export function DeltaTables({
 
   const biggestRetailChanges = [...deltaRows]
     .sort((a, b) => Math.abs(b.retailDelta) - Math.abs(a.retailDelta))
-    .slice(0, 25);
+    .slice(0, 50);
 
   const transitions = deltaRows
     .filter((r) => r.bucketChanged)
@@ -117,9 +119,10 @@ export function DeltaTables({
   return (
     <div className="two-col" style={{ marginTop: 16 }}>
       <div className="card">
-        <h2>Month-over-Month Delta</h2>
+        <h2>Run-to-Run Delta</h2>
         <p className="small">
-          Comparing <strong>{prior.month}</strong> → <strong>{current.month}</strong>
+          Comparing <strong>{baselineRun.month}</strong> →{" "}
+          <strong>{comparisonRun.month}</strong>
         </p>
         <div className="table-wrap">
           <table>
@@ -141,9 +144,18 @@ export function DeltaTables({
                   <td>{r.store}</td>
                   <td>{Math.round(r.priorRetail)}</td>
                   <td>{Math.round(r.currentRetail)}</td>
-                  <td>{r.retailDelta > 0 ? "+" : ""}{Math.round(r.retailDelta)}</td>
-                  <td>{r.benchmarkDelta > 0 ? "+" : ""}{Math.round(r.benchmarkDelta)}</td>
-                  <td>{r.shareDelta > 0 ? "+" : ""}{fmtPct(r.shareDelta)}</td>
+                  <td>
+                    {r.retailDelta > 0 ? "+" : ""}
+                    {Math.round(r.retailDelta)}
+                  </td>
+                  <td>
+                    {r.benchmarkDelta > 0 ? "+" : ""}
+                    {Math.round(r.benchmarkDelta)}
+                  </td>
+                  <td>
+                    {r.shareDelta > 0 ? "+" : ""}
+                    {fmtPct(r.shareDelta)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -154,7 +166,9 @@ export function DeltaTables({
       <div className="card">
         <h2>Status Transitions</h2>
         <p className="small">
-          Stores whose CFAO bucket changed from <strong>{prior.month}</strong> to <strong>{current.month}</strong>
+          Stores whose CFAO bucket changed from{" "}
+          <strong>{baselineRun.month}</strong> to{" "}
+          <strong>{comparisonRun.month}</strong>
         </p>
         <div className="table-wrap">
           <table>
@@ -174,13 +188,16 @@ export function DeltaTables({
                   <td>{r.store}</td>
                   <td>{r.priorBucket}</td>
                   <td>{r.currentBucket}</td>
-                  <td>{r.retailDelta > 0 ? "+" : ""}{Math.round(r.retailDelta)}</td>
+                  <td>
+                    {r.retailDelta > 0 ? "+" : ""}
+                    {Math.round(r.retailDelta)}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
           {!transitions.length && (
-            <p className="small">No bucket transitions between the latest two runs.</p>
+            <p className="small">No bucket transitions between these two runs.</p>
           )}
         </div>
       </div>

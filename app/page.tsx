@@ -1,5 +1,5 @@
 "use client";
-import { DeltaTables } from "@/components/DeltaTables";
+
 import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
 import { upload } from "@vercel/blob/client";
@@ -15,6 +15,7 @@ import {
 } from "@/lib/cfao";
 import { SectionTable } from "@/components/SectionTable";
 import { HistoryCharts } from "@/components/HistoryCharts";
+import { DeltaTables } from "@/components/DeltaTables";
 
 type RunSummary = {
   id: string;
@@ -59,6 +60,11 @@ function parseCsvFile<T extends Record<string, string>>(file: File): Promise<T[]
   });
 }
 
+function getRecentSixMonthRuns<T extends { month: string }>(runs: T[]) {
+  const sorted = [...runs].sort((a, b) => a.month.localeCompare(b.month));
+  return sorted.slice(-6);
+}
+
 export default function Page() {
   const [presets, setPresets] = useState<SkuPreset[]>(DEFAULT_PRESETS);
   const [presetSlug, setPresetSlug] = useState(DEFAULT_PRESETS[0].slug);
@@ -95,6 +101,8 @@ export default function Page() {
   const [search, setSearch] = useState("");
 
   const [historyRuns, setHistoryRuns] = useState<RunDetails[]>([]);
+  const [baselineRunId, setBaselineRunId] = useState("");
+  const [comparisonRunId, setComparisonRunId] = useState("");
 
   async function loadPresets() {
     const res = await fetch("/api/presets");
@@ -177,6 +185,25 @@ export default function Page() {
   useEffect(() => {
     loadHistoryForSku(ourSku);
   }, [ourSku]);
+
+  useEffect(() => {
+    const recent = getRecentSixMonthRuns(historyRuns);
+    if (!recent.length) {
+      setBaselineRunId("");
+      setComparisonRunId("");
+      return;
+    }
+
+    const baselineStillExists = recent.some((r) => r.id === baselineRunId);
+    const comparisonStillExists = recent.some((r) => r.id === comparisonRunId);
+
+    if (!baselineStillExists) {
+      setBaselineRunId(recent[0].id);
+    }
+    if (!comparisonStillExists) {
+      setComparisonRunId(recent[recent.length - 1].id);
+    }
+  }, [historyRuns, baselineRunId, comparisonRunId]);
 
   function applyPreset(slug: string) {
     const preset = presets.find((p) => p.slug === slug);
@@ -377,10 +404,14 @@ export default function Page() {
     };
   }, [activeResults, search]);
 
+  const recentHistoryRuns = useMemo(() => {
+    return getRecentSixMonthRuns(historyRuns);
+  }, [historyRuns]);
+
   const storeOptions = useMemo(() => {
     const map = new Map<string, string>();
 
-    for (const run of historyRuns) {
+    for (const run of recentHistoryRuns) {
       for (const store of run.results.allStores) {
         if (!map.has(store.agencyId)) {
           map.set(store.agencyId, store.store);
@@ -391,22 +422,22 @@ export default function Page() {
     return Array.from(map.entries())
       .map(([agencyId, store]) => ({ agencyId, store }))
       .sort((a, b) => a.store.localeCompare(b.store));
-  }, [historyRuns]);
+  }, [recentHistoryRuns]);
 
   const skuData = useMemo(() => {
-    return historyRuns.map((run) => ({
+    return recentHistoryRuns.map((run) => ({
       month: run.month,
       Cuts: run.results.cuts.length,
       Fixes: run.results.fixes.length,
       Adds: run.results.adds.length,
       Outperform: run.results.outperform.length,
     }));
-  }, [historyRuns]);
+  }, [recentHistoryRuns]);
 
   const storeData = useMemo(() => {
     if (!selectedStoreId) return [];
 
-    return historyRuns.map((run) => {
+    return recentHistoryRuns.map((run) => {
       const row = run.results.allStores.find(
         (r: any) => r.agencyId === selectedStoreId
       );
@@ -420,7 +451,15 @@ export default function Page() {
         Share: row?.share ? Number((row.share * 100).toFixed(1)) : 0,
       };
     });
-  }, [historyRuns, selectedStoreId]);
+  }, [recentHistoryRuns, selectedStoreId]);
+
+  const baselineRun = useMemo(() => {
+    return recentHistoryRuns.find((r) => r.id === baselineRunId) ?? null;
+  }, [recentHistoryRuns, baselineRunId]);
+
+  const comparisonRun = useMemo(() => {
+    return recentHistoryRuns.find((r) => r.id === comparisonRunId) ?? null;
+  }, [recentHistoryRuns, comparisonRunId]);
 
   return (
     <main className="page">
@@ -829,7 +868,7 @@ export default function Page() {
               <span className="small">
                 {historyLoading
                   ? "Loading store/SKU history..."
-                  : `Loaded ${historyRuns.length} saved run(s) for SKU ${ourSku}`}
+                  : `Loaded ${recentHistoryRuns.length} run(s) from the most recent 6 months for SKU ${ourSku}`}
               </span>
             </div>
 
@@ -851,10 +890,46 @@ export default function Page() {
               </div>
             </div>
 
+            <div className="row-2" style={{ marginTop: 12 }}>
+              <div>
+                <label className="label">Baseline run</label>
+                <select
+                  className="input"
+                  value={baselineRunId}
+                  onChange={(e) => setBaselineRunId(e.target.value)}
+                >
+                  <option value="">Select baseline</option>
+                  {recentHistoryRuns.map((run) => (
+                    <option key={run.id} value={run.id}>
+                      {run.month} — {run.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="label">Comparison run</label>
+                <select
+                  className="input"
+                  value={comparisonRunId}
+                  onChange={(e) => setComparisonRunId(e.target.value)}
+                >
+                  <option value="">Select comparison</option>
+                  {recentHistoryRuns.map((run) => (
+                    <option key={run.id} value={run.id}>
+                      {run.month} — {run.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             <HistoryCharts skuData={skuData} storeData={storeData} />
-         
-</div>
-<DeltaTables historyRuns={historyRuns} /> 
+            <DeltaTables
+              baselineRun={baselineRun}
+              comparisonRun={comparisonRun}
+            />
+          </div>
         </>
       )}
 
