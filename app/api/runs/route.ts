@@ -76,7 +76,7 @@ export async function POST(request: Request) {
     const ourSku = String(form.get("ourSku") ?? "");
     const competitorSkus = JSON.parse(String(form.get("competitorSkus") ?? "[]"));
     const oneToOneMode = String(form.get("oneToOneMode") ?? "false") === "true";
-    onst rawMode = String(form.get("mode") ?? "annual");
+    const rawMode = String(form.get("mode") ?? "annual");
 const mode: "annual" | "monthly" = rawMode === "monthly" ? "monthly" : "annual";
     const thresholds = JSON.parse(String(form.get("thresholds") ?? "{}"));
     const createdBy = String(form.get("createdBy") ?? "") || null;
