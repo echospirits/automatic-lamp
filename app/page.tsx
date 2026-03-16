@@ -1,5 +1,5 @@
 "use client";
-
+import { DeltaTables } from "@/components/DeltaTables";
 import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
 import { upload } from "@vercel/blob/client";
@@ -81,6 +81,7 @@ export default function Page() {
   const [salesFile, setSalesFile] = useState<File | null>(null);
 
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [runFilterSku, setRunFilterSku] = useState("ALL");
   const [selectedRun, setSelectedRun] = useState<RunDetails | null>(null);
 
   const [previewResults, setPreviewResults] = useState<PreviewResults | null>(
@@ -88,9 +89,12 @@ export default function Page() {
   );
   const [previewLoading, setPreviewLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const [selectedStoreId, setSelectedStoreId] = useState("");
   const [search, setSearch] = useState("");
+
+  const [historyRuns, setHistoryRuns] = useState<RunDetails[]>([]);
 
   async function loadPresets() {
     const res = await fetch("/api/presets");
@@ -117,8 +121,12 @@ export default function Page() {
     }
   }
 
-  async function loadRuns() {
-    const res = await fetch(`/api/runs?ourSku=${encodeURIComponent(ourSku)}`);
+  async function loadRuns(filterSku?: string) {
+    const qs =
+      filterSku && filterSku !== "ALL"
+        ? `?ourSku=${encodeURIComponent(filterSku)}`
+        : "";
+    const res = await fetch(`/api/runs${qs}`);
     const data = await res.json();
     setRuns(Array.isArray(data) ? data : []);
   }
@@ -128,6 +136,34 @@ export default function Page() {
     const data = await res.json();
     setSelectedRun(data);
     setPreviewResults(null);
+    setSelectedStoreId("");
+  }
+
+  async function loadHistoryForSku(sku: string) {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`/api/runs?ourSku=${encodeURIComponent(sku)}`);
+      const summaries = await res.json();
+
+      if (!Array.isArray(summaries) || !summaries.length) {
+        setHistoryRuns([]);
+        return;
+      }
+
+      const details = await Promise.all(
+        summaries.map(async (run: RunSummary) => {
+          const detailRes = await fetch(
+            `/api/runs?runId=${encodeURIComponent(run.id)}`
+          );
+          return detailRes.json();
+        })
+      );
+
+      details.sort((a, b) => a.month.localeCompare(b.month));
+      setHistoryRuns(details);
+    } finally {
+      setHistoryLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -135,7 +171,11 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
-    loadRuns();
+    loadRuns(runFilterSku);
+  }, [runFilterSku]);
+
+  useEffect(() => {
+    loadHistoryForSku(ourSku);
   }, [ourSku]);
 
   function applyPreset(slug: string) {
@@ -151,6 +191,7 @@ export default function Page() {
 
     setPreviewResults(null);
     setSelectedRun(null);
+    setSelectedStoreId("");
   }
 
   async function savePreset() {
@@ -208,6 +249,7 @@ export default function Page() {
 
       setPreviewResults(results);
       setSelectedRun(null);
+      setSelectedStoreId("");
     } catch (error) {
       console.error(error);
       alert("Preview failed. Check the uploaded CSV structure.");
@@ -281,8 +323,9 @@ export default function Page() {
         return;
       }
 
-      await loadRuns();
+      await loadRuns(runFilterSku);
       await openRun(data.runId);
+      await loadHistoryForSku(ourSku);
     } catch (error) {
       console.error(error);
       alert("Failed to save shared run.");
@@ -300,7 +343,8 @@ export default function Page() {
       setSelectedRun(null);
     }
 
-    await loadRuns();
+    await loadRuns(runFilterSku);
+    await loadHistoryForSku(ourSku);
   }
 
   const activeResults = previewResults ?? selectedRun?.results ?? null;
@@ -334,41 +378,49 @@ export default function Page() {
   }, [activeResults, search]);
 
   const storeOptions = useMemo(() => {
-    return (activeResults?.allStores ?? [])
-      .map((r: any) => ({ agencyId: r.agencyId, store: r.store }))
+    const map = new Map<string, string>();
+
+    for (const run of historyRuns) {
+      for (const store of run.results.allStores) {
+        if (!map.has(store.agencyId)) {
+          map.set(store.agencyId, store.store);
+        }
+      }
+    }
+
+    return Array.from(map.entries())
+      .map(([agencyId, store]) => ({ agencyId, store }))
       .sort((a, b) => a.store.localeCompare(b.store));
-  }, [activeResults]);
+  }, [historyRuns]);
 
-  const skuData = activeResults
-    ? [
-        {
-          month,
-          Cuts: activeResults.cuts.length,
-          Fixes: activeResults.fixes.length,
-          Adds: activeResults.adds.length,
-          Outperform: activeResults.outperform.length,
-        },
-      ]
-    : [];
+  const skuData = useMemo(() => {
+    return historyRuns.map((run) => ({
+      month: run.month,
+      Cuts: run.results.cuts.length,
+      Fixes: run.results.fixes.length,
+      Adds: run.results.adds.length,
+      Outperform: run.results.outperform.length,
+    }));
+  }, [historyRuns]);
 
-  const storeData =
-    selectedStoreId && activeResults
-      ? (() => {
-          const row = activeResults.allStores.find(
-            (r: any) => r.agencyId === selectedStoreId
-          );
-          return [
-            {
-              month,
-              Retail: row?.ourRetail ?? 0,
-              Benchmark: activeOneToOneMode
-                ? row?.oneToOneRetail ?? 0
-                : row?.craftAvg ?? 0,
-              Share: row?.share ? Number((row.share * 100).toFixed(1)) : 0,
-            },
-          ];
-        })()
-      : [];
+  const storeData = useMemo(() => {
+    if (!selectedStoreId) return [];
+
+    return historyRuns.map((run) => {
+      const row = run.results.allStores.find(
+        (r: any) => r.agencyId === selectedStoreId
+      );
+
+      return {
+        month: run.month,
+        Retail: row?.ourRetail ?? 0,
+        Benchmark: run.oneToOneMode
+          ? row?.oneToOneRetail ?? 0
+          : row?.craftAvg ?? 0,
+        Share: row?.share ? Number((row.share * 100).toFixed(1)) : 0,
+      };
+    });
+  }, [historyRuns, selectedStoreId]);
 
   return (
     <main className="page">
@@ -376,8 +428,8 @@ export default function Page() {
         <div>
           <h1>CFAO Team Tool</h1>
           <p>
-            Shared presets, shared saved runs, CSV export, history charts, and
-            corrected CFAO logic.
+            Shared presets, persistent saved runs, CSV export, true history
+            charts, and corrected CFAO logic.
           </p>
         </div>
         <span className="badge">Vercel team version</span>
@@ -639,6 +691,27 @@ export default function Page() {
 
       <div className="card" style={{ marginTop: 16 }}>
         <h2>Saved Runs</h2>
+        <div className="toolbar" style={{ marginBottom: 12 }}>
+          <label className="label" style={{ marginBottom: 0 }}>
+            Saved run filter
+          </label>
+          <select
+            className="input"
+            style={{ maxWidth: 260 }}
+            value={runFilterSku}
+            onChange={(e) => setRunFilterSku(e.target.value)}
+          >
+            <option value="ALL">All SKUs</option>
+            {Array.from(new Set(runs.map((r) => r.our_sku)))
+              .sort()
+              .map((sku) => (
+                <option key={sku} value={sku}>
+                  {sku}
+                </option>
+              ))}
+          </select>
+        </div>
+
         <div className="table-wrap">
           <table>
             <thead>
@@ -675,7 +748,7 @@ export default function Page() {
               ))}
             </tbody>
           </table>
-          {!runs.length && <p className="small">No shared runs yet.</p>}
+          {!runs.length && <p className="small">No saved runs found.</p>}
         </div>
       </div>
 
@@ -752,6 +825,14 @@ export default function Page() {
 
           <div className="card" style={{ marginTop: 16 }}>
             <h2>History Charts</h2>
+            <div className="toolbar" style={{ marginBottom: 12 }}>
+              <span className="small">
+                {historyLoading
+                  ? "Loading store/SKU history..."
+                  : `Loaded ${historyRuns.length} saved run(s) for SKU ${ourSku}`}
+              </span>
+            </div>
+
             <div className="row-2">
               <div>
                 <label className="label">Store</label>
@@ -769,8 +850,11 @@ export default function Page() {
                 </select>
               </div>
             </div>
+
             <HistoryCharts skuData={skuData} storeData={storeData} />
-          </div>
+         
+</div>
+<DeltaTables historyRuns={historyRuns} /> 
         </>
       )}
 
