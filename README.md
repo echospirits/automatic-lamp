@@ -1,17 +1,12 @@
-# CFAO Dashboard MVP
+# CFAO Dashboard v2
 
-A Next.js starter for monthly Cut / Fix / Add / Outperform analysis.
+Vercel-ready Next.js dashboard with:
+- corrected CFAO logic
+- saved monthly runs in browser localStorage
+- editable SKU presets and thresholds
+- CSV export
+- store and SKU history charts
 
-## Run locally
-```bash
+## Run
 npm install
 npm run dev
-```
-
-## Deploy
-Import this project into Vercel and deploy.
-
-## Included presets
-- 2804B Standard Bourbon
-- 3135B House Vodka
-- 5656L Capital City vs Vohio
